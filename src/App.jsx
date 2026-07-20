@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { PRODUCTS, REMOVED_PRODUCTS } from "./data.js";
+import { fetchProductImage } from "./lib/imageClient.js";
 
 /* ---------------------------------------------------------------
    1. FLATTENING — transforme les entrées groupées (PRODUCTS) en
@@ -168,10 +169,15 @@ function LogoBadge({ code }) {
   );
 }
 
-function ProductCard({ row, compact }) {
+function ProductCard({ row, compact, onOpen }) {
   if (compact) {
     return (
-      <div className={"product-row-compact" + (row.removed ? " is-removed" : "")}>
+      <div
+        className={"product-row-compact" + (row.removed ? " is-removed" : "")}
+        onClick={() => onOpen && onOpen(row)}
+        role="button"
+        tabIndex={0}
+      >
         <div className="pr-c-main">
           <span className="pr-c-brand">{row.marque}</span>
           <span className="pr-c-name">{row.produit}</span>
@@ -186,7 +192,13 @@ function ProductCard({ row, compact }) {
     );
   }
   return (
-    <div className={"product-card" + (row.removed ? " is-removed" : "")}>
+    <div
+      className={"product-card" + (row.removed ? " is-removed" : "")}
+      onClick={() => onOpen && onOpen(row)}
+      role="button"
+      tabIndex={0}
+      title="Voir les images de ce produit"
+    >
       <div className="product-card-crumb">
         {row.rayon} <span className="crumb-sep">›</span> {row.categorie}
         {row.sousCategorie && row.sousCategorie !== row.categorie ? (
@@ -209,6 +221,123 @@ function ProductCard({ row, compact }) {
         </div>
       </div>
       {row.note && <div className="product-card-note">{row.note}</div>}
+      <div className="product-card-hint">🖼️ Voir les images</div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Images produit — appelle le pipeline serverless (/api/image),
+   voir api/image.js : cache Upstash Redis + upload permanent
+   Vercel Blob. Un "produit" comme "Excellence Noir: Doux 85%/70%,
+   Mini Noir 85%/70%, Noir Absolu 99% ..." est éclaté en variantes
+   individuelles, chacune avec sa propre recherche d'image.
+--------------------------------------------------------------- */
+function splitVariants(produit) {
+  let prefix = "";
+  let rest = produit;
+  const colonIdx = produit.indexOf(":");
+  if (colonIdx > -1 && colonIdx < 45) {
+    prefix = produit.slice(0, colonIdx).trim();
+    rest = produit.slice(colonIdx + 1).trim();
+  }
+  const parts = rest
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return [produit.trim()];
+  return parts.map((p) => (prefix ? `${prefix} ${p}` : p));
+}
+
+function VariantImage({ query, label }) {
+  const [state, setState] = useState({ loading: true, url: null, error: false, source: null });
+
+  useEffect(() => {
+    let alive = true;
+    setState({ loading: true, url: null, error: false, source: null });
+    fetchProductImage(query).then((data) => {
+      if (!alive) return;
+      setState({ loading: false, url: data && data.url, error: !data || data.error, source: data && data.source });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [query]);
+
+  const searchUrl = "https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(query);
+
+  return (
+    <div className="variant-card">
+      <div className="variant-image-wrap">
+        {state.loading && <div className="skeleton" />}
+        {!state.loading && state.url && (
+          <a href={searchUrl} target="_blank" rel="noreferrer" title={label}>
+            <img src={state.url} alt={label} loading="lazy" />
+          </a>
+        )}
+        {!state.loading && !state.url && (
+          <a className="variant-fallback" href={searchUrl} target="_blank" rel="noreferrer">
+            🔍<span>Rechercher l'image</span>
+          </a>
+        )}
+      </div>
+      <div className="variant-label">{label}</div>
+      {state.source && <div className="variant-source">via {state.source.replace("_", " ")}</div>}
+    </div>
+  );
+}
+
+function ProductImageModal({ row, onClose }) {
+  const variants = useMemo(() => splitVariants(row.produit).slice(0, 16), [row]);
+  const overflow = splitVariants(row.produit).length - variants.length;
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-crumb">
+              {row.rayon} <span className="crumb-sep">›</span> {row.categorie}
+              {row.sousCategorie && row.sousCategorie !== row.categorie ? (
+                <>
+                  {" "}
+                  <span className="crumb-sep">›</span> {row.sousCategorie}
+                </>
+              ) : null}
+            </div>
+            <h3>{row.marque}</h3>
+            <div className="modal-badges">
+              {row.removed && <span className="badge badge-SUPPRIME">Supprimé</span>}
+              {row.logos.filter((l) => l !== "SUPPRIME").map((l) => (
+                <LogoBadge key={l} code={l} />
+              ))}
+            </div>
+          </div>
+          <button className="modal-close" onClick={onClose} aria-label="Fermer">
+            ✕
+          </button>
+        </div>
+        {row.note && <p className="modal-note">{row.note}</p>}
+        <div className="modal-image-grid">
+          {variants.map((v, i) => (
+            <VariantImage key={row.id + "-" + i} query={`${row.marque} ${v}`} label={v} />
+          ))}
+        </div>
+        {overflow > 0 && (
+          <div className="modal-overflow-note">+ {overflow} autres variantes non affichées</div>
+        )}
+        <div className="modal-footer">
+          Images recherchées et mises en cache automatiquement via l'API serverless
+          (Upstash Redis + Vercel Blob) — chaque produit n'est résolu qu'une seule fois pour
+          tous les visiteurs.
+        </div>
+      </div>
     </div>
   );
 }
@@ -347,6 +476,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 900 : false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [selectedProduct, setSelectedProduct] = useState(null);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 900);
@@ -359,8 +489,8 @@ export default function App() {
   }, [filters, sortKey]);
 
   useEffect(() => {
-    document.body.style.overflow = isMobile && sheetOpen ? "hidden" : "";
-  }, [isMobile, sheetOpen]);
+    document.body.style.overflow = isMobile && sheetOpen ? "hidden" : selectedProduct ? "hidden" : "";
+  }, [isMobile, sheetOpen, selectedProduct]);
 
   const filteredResults = useMemo(() => FLAT.filter((r) => matchesFilters(r, filters, null)), [filters]);
   const results = useMemo(() => sortResults(filteredResults, sortKey), [filteredResults, sortKey]);
@@ -395,6 +525,7 @@ export default function App() {
           resetAll={resetAll}
           results={results}
           onClose={() => setSheetOpen(false)}
+          onOpenProduct={setSelectedProduct}
         />
       ) : (
         <main className="layout">
@@ -433,7 +564,7 @@ export default function App() {
               <>
                 <div className="product-grid">
                   {results.slice(0, visibleCount).map((r) => (
-                    <ProductCard key={r.id} row={r} />
+                    <ProductCard key={r.id} row={r} onOpen={setSelectedProduct} />
                   ))}
                 </div>
                 {visibleCount < results.length && (
@@ -457,13 +588,17 @@ export default function App() {
         </div>
         <div className="copyright">© yelotag.com</div>
       </footer>
+
+      {selectedProduct && (
+        <ProductImageModal row={selectedProduct} onClose={() => setSelectedProduct(null)} />
+      )}
     </div>
   );
 }
 
 /* Mobile split view : 3/4 filtres (haut) + 1/4 résultats en direct (bas),
    visibles en parallèle pendant qu'on coche les filtres. */
-function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, onClose }) {
+function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, onClose, onOpenProduct }) {
   return (
     <div className="mobile-split">
       <div className="mobile-split-filters">
@@ -498,7 +633,7 @@ function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, 
           {results.length === 0 ? (
             <div className="empty-state-mini">Aucun résultat</div>
           ) : (
-            results.slice(0, 40).map((r) => <ProductCard key={r.id} row={r} compact />)
+            results.slice(0, 40).map((r) => <ProductCard key={r.id} row={r} compact onOpen={onOpenProduct} />)
           )}
           {results.length > 40 && (
             <div className="empty-state-mini">… et {results.length - 40} autres, fermez pour tout voir</div>
