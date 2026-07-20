@@ -16,14 +16,10 @@
  *
  * ORDER IN WHICH IMAGES ARE LOOKED UP (first hit wins):
  *   1. Redis cache (Upstash)                     — always checked first, regardless of config
- *   2. Google Programmable Search (GOOGLE_CSE_*)  — if configured. Point it at
- *                                                    https://www.consistoire.org/images/produits/*
- *                                                    (see README) to search the official catalog
- *                                                    images first, or set GOOGLE_CSE_SITE to force
- *                                                    a site-restrict even on a generic engine.
- *   3. Bing Image Search v7   (BING_IMAGE_SEARCH_KEY)   — if configured
- *   4. SerpApi / Google Images (SERPAPI_KEY)            — if configured
- *   5. Openverse (keyless, CC-licensed)                 — always available, last resort
+ *   2. SerpApi / Google Images (SERPAPI_KEY)      — if configured. Primary provider (Google's
+ *                                                    own Custom Search JSON API is closed to
+ *                                                    new customers, so it's not used here).
+ *   3. Openverse (keyless, CC-licensed)           — always available, last resort
  *
  * DEBUG LOGGING
  *   Verbose step-by-step logs ("[image] ...") are printed automatically whenever the function
@@ -36,10 +32,6 @@
  *   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN   -> Upstash Redis (or KV_REST_API_URL/KV_REST_API_TOKEN
  *                                                            if you used the Vercel KV / Upstash integration)
  *   BLOB_READ_WRITE_TOKEN                                -> Vercel Blob (auto-set by the Blob integration)
- *   GOOGLE_CSE_KEY + GOOGLE_CSE_CX                        -> Google Programmable Search (image search)
- *   GOOGLE_CSE_SITE                                       -> optional "site:..." restrict appended in code,
- *                                                             e.g. site:www.consistoire.org/images/produits
- *   BING_IMAGE_SEARCH_KEY                                 -> Bing Image Search v7
  *   SERPAPI_KEY                                           -> SerpApi (Google Images engine)
  *   DEBUG_IMAGES                                          -> "1" force verbose logs, "0" force quiet
  *   (none of the above set)                               -> falls back to Openverse (keyless, CC-licensed)
@@ -153,99 +145,12 @@ function looksLikeConfigError(status, bodyText) {
 /* ---------------------------------------------------------------
    Image search providers — tried in order, first hit wins.
    Each one logs the exact URL/site it queries (API keys redacted).
+
+   NOTE: Google Custom Search JSON API is no longer usable for new
+   Google Cloud projects/customers (Google closed it off), so it and
+   the never-configured Bing provider have been removed. SerpApi is
+   now the primary provider, falling back to keyless Openverse.
 --------------------------------------------------------------- */
-async function searchGoogleCSE(query) {
-  const key = process.env.GOOGLE_CSE_KEY;
-  const cx = process.env.GOOGLE_CSE_CX;
-  if (!key || !cx) {
-    dlog("Google CSE — skipped (GOOGLE_CSE_KEY / GOOGLE_CSE_CX not set)");
-    return null;
-  }
-  if (isProviderTripped("google_cse")) {
-    dlog("Google CSE — skipped (circuit breaker tripped, see earlier CONFIG ERROR log)");
-    return null;
-  }
-  const site = process.env.GOOGLE_CSE_SITE; // e.g. "site:www.consistoire.org/images/produits"
-  const q = site ? `${site} ${query}` : query;
-  const url =
-    `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&searchType=image` +
-    `&num=1&safe=active&q=${encodeURIComponent(q)}`;
-  // Masked diagnostics: confirms which key/cx is actually being used at request time,
-  // without printing the secret. Helps catch "wrong env var loaded" / stale env issues.
-  dlog(
-    "Google CSE — using key:",
-    key ? `${key.slice(0, 6)}...${key.slice(-4)} (len ${key.length})` : "(missing)",
-    "cx:", cx
-  );
-  dlog("Google CSE — searching:", JSON.stringify(q), site ? "(site-restricted)" : "(engine's own scope/site)");
-  const res = await fetch(url);
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    // Full body this time (not truncated) — the "status" field (e.g. PERMISSION_DENIED)
-    // and sometimes a project number in the message are the actual diagnostic signal.
-    dlog("Google CSE — HTTP", res.status, "FULL BODY:", bodyText);
-    try {
-      const parsed = JSON.parse(bodyText);
-      dlog("Google CSE — error.status:", parsed?.error?.status);
-      dlog("Google CSE — error.message:", parsed?.error?.message);
-      const reasons = (parsed?.error?.errors || []).map((e) => e.reason).join(", ");
-      if (reasons) dlog("Google CSE — error.errors[].reason:", reasons);
-    } catch {
-      dlog("Google CSE — (body was not valid JSON, see FULL BODY above)");
-    }
-    if (looksLikeConfigError(res.status, bodyText)) {
-      tripBreaker(
-        "google_cse",
-        "403 persisting after enabling API + billing almost always means the API key " +
-          "belongs to a DIFFERENT GCP project than the one you enabled the API on. " +
-          "Go to https://console.cloud.google.com/apis/credentials, open the key, and check " +
-          "the project name shown in the top project-picker dropdown while viewing that key " +
-          "— it must match the project where you clicked Enable."
-      );
-    }
-    return null;
-  }
-  const data = await res.json();
-  const item = data.items && data.items[0];
-  if (!item) {
-    dlog("Google CSE — no results for", JSON.stringify(q));
-    return null;
-  }
-  dlog("Google CSE — found:", item.link);
-  return { url: item.link, source: "google_cse", title: item.title };
-}
-
-async function searchBing(query) {
-  const key = process.env.BING_IMAGE_SEARCH_KEY;
-  if (!key) {
-    dlog("Bing — skipped (BING_IMAGE_SEARCH_KEY not set)");
-    return null;
-  }
-  if (isProviderTripped("bing")) {
-    dlog("Bing — skipped (circuit breaker tripped, see earlier CONFIG ERROR log)");
-    return null;
-  }
-  const url = `https://api.bing.microsoft.com/v7.0/images/search?q=${encodeURIComponent(query)}&count=1&safeSearch=Moderate`;
-  dlog("Bing — searching:", JSON.stringify(query));
-  const res = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": key } });
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    dlog("Bing — HTTP", res.status, bodyText.slice(0, 200));
-    if (looksLikeConfigError(res.status, bodyText)) {
-      tripBreaker("bing", "check BING_IMAGE_SEARCH_KEY is valid and the resource is active in Azure");
-    }
-    return null;
-  }
-  const data = await res.json();
-  const item = data.value && data.value[0];
-  if (!item) {
-    dlog("Bing — no results");
-    return null;
-  }
-  dlog("Bing — found:", item.contentUrl);
-  return { url: item.contentUrl, source: "bing", title: item.name };
-}
-
 async function searchSerpApi(query) {
   const key = process.env.SERPAPI_KEY;
   if (!key) {
@@ -296,7 +201,7 @@ async function searchOpenverse(query) {
   return { url: item.url, source: "openverse", title: item.title, credit: item.creator };
 }
 
-const PROVIDERS = [searchGoogleCSE, searchBing, searchSerpApi, searchOpenverse];
+const PROVIDERS = [searchSerpApi, searchOpenverse];
 
 function providerConfigSummary() {
   const status = (envConfigured, name) => {
@@ -304,8 +209,6 @@ function providerConfigSummary() {
     return isProviderTripped(name) ? "TRIPPED (config error)" : "configured";
   };
   return [
-    `google_cse=${status(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX, "google_cse")}`,
-    `bing=${status(process.env.BING_IMAGE_SEARCH_KEY, "bing")}`,
     `serpapi=${status(process.env.SERPAPI_KEY, "serpapi")}`,
     `openverse=always available`,
   ].join(" > ");
@@ -317,9 +220,7 @@ dlog("redis:", REDIS_ENABLED ? "enabled (Upstash)" : "disabled — using in-memo
 if (DEBUG) {
   const fingerprint = (v) => (v ? `${v.slice(0, 6)}...${v.slice(-4)} (len ${v.length})` : "(not set)");
   console.log("[image] cold-start key fingerprints (to catch stale/wrong env files):");
-  console.log("[image]   GOOGLE_CSE_KEY:", fingerprint(process.env.GOOGLE_CSE_KEY));
-  console.log("[image]   GOOGLE_CSE_CX :", process.env.GOOGLE_CSE_CX || "(not set)");
-  console.log("[image]   SERPAPI_KEY   :", fingerprint(process.env.SERPAPI_KEY));
+  console.log("[image]   SERPAPI_KEY:", fingerprint(process.env.SERPAPI_KEY));
 }
 
 async function resolveImage(query) {
