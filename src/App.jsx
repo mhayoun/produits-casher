@@ -35,6 +35,15 @@ function stripTags(text) {
     .trim();
 }
 
+// Accent/case-insensitive normalization used by both the global quick-search
+// bar and the per-filter "search within options" boxes.
+function normalizeSearch(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
 function flattenCatalog(groups, removedGroups) {
   const rows = [];
   let id = 0;
@@ -271,8 +280,9 @@ function VariantImage({ query, label }) {
       <div className="variant-image-wrap">
         {state.loading && <div className="skeleton" />}
         {!state.loading && state.url && (
-          <a href={searchUrl} target="_blank" rel="noreferrer" title={label}>
+          <a href={searchUrl} target="_blank" rel="noreferrer" title={`${label} — cliquer pour vérifier et voir toutes les images`}>
             <img src={state.url} alt={label} loading="lazy" />
+            <span className="variant-ai-flag">1ᵉʳ résultat IA · cliquer pour vérifier</span>
           </a>
         )}
         {!state.loading && !state.url && (
@@ -324,6 +334,11 @@ function ProductImageModal({ row, onClose }) {
           </button>
         </div>
         {row.note && <p className="modal-note">{row.note}</p>}
+        <div className="modal-ai-warning">
+          ⚠️ Les images ci-dessous sont le <strong>premier résultat trouvé automatiquement par IA</strong> — elles
+          ne sont pas vérifiées. Cliquez sur une image pour ouvrir la recherche complète et voir toutes les images
+          disponibles avant de vous y fier.
+        </div>
         <div className="modal-image-grid">
           {variants.map((v, i) => (
             <VariantImage key={row.id + "-" + i} query={`${row.marque} ${v}`} label={v} />
@@ -342,10 +357,17 @@ function ProductImageModal({ row, onClose }) {
   );
 }
 
-/* Accordion section for one filter, with checkbox multi-select */
+/* Accordion section for one filter, with checkbox multi-select and a
+   search-within-options box for long lists (Marque, Nom du produit...) */
 function FilterSection({ def, filters, setFilters, defaultOpen }) {
   const [open, setOpen] = useState(!!defaultOpen);
+  const [search, setSearch] = useState("");
   const options = useMemo(() => computeOptions(filters, def), [filters]);
+  const visibleOptions = useMemo(() => {
+    if (!search.trim()) return options;
+    const needle = normalizeSearch(search);
+    return options.filter((opt) => normalizeSearch(opt.label).includes(needle));
+  }, [options, search]);
   const selected = filters[def.key];
 
   const toggleValue = (value) => {
@@ -379,8 +401,22 @@ function FilterSection({ def, filters, setFilters, defaultOpen }) {
       </button>
       {open && (
         <div className="accordion-body">
-          {options.length === 0 && <div className="no-options">Aucune option disponible</div>}
-          {options.map((opt) => (
+          {options.length > 5 && (
+            <input
+              type="text"
+              className="filter-search-input"
+              placeholder={`Rechercher : ${def.label.toLowerCase()}…`}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+          {visibleOptions.length === 0 && (
+            <div className="no-options">
+              {options.length === 0 ? "Aucune option disponible" : "Aucun résultat pour cette recherche"}
+            </div>
+          )}
+          {visibleOptions.map((opt) => (
             <label key={opt.value} className="filter-option">
               <input type="checkbox" checked={selected.has(opt.value)} onChange={() => toggleValue(opt.value)} />
               <span className="filter-option-label">
@@ -477,6 +513,7 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [quickSearch, setQuickSearch] = useState("");
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 900);
@@ -486,13 +523,20 @@ export default function App() {
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [filters, sortKey]);
+  }, [filters, sortKey, quickSearch]);
 
   useEffect(() => {
     document.body.style.overflow = isMobile && sheetOpen ? "hidden" : selectedProduct ? "hidden" : "";
   }, [isMobile, sheetOpen, selectedProduct]);
 
-  const filteredResults = useMemo(() => FLAT.filter((r) => matchesFilters(r, filters, null)), [filters]);
+  const filteredByFacets = useMemo(() => FLAT.filter((r) => matchesFilters(r, filters, null)), [filters]);
+  const filteredResults = useMemo(() => {
+    if (!quickSearch.trim()) return filteredByFacets;
+    const needle = normalizeSearch(quickSearch);
+    return filteredByFacets.filter((r) =>
+      normalizeSearch(`${r.rayon} ${r.categorie} ${r.sousCategorie} ${r.marque} ${r.produit}`).includes(needle)
+    );
+  }, [filteredByFacets, quickSearch]);
   const results = useMemo(() => sortResults(filteredResults, sortKey), [filteredResults, sortKey]);
 
   const totalActive = FILTER_DEFS.reduce((acc, d) => acc + filters[d.key].size, 0);
@@ -508,6 +552,25 @@ export default function App() {
               <div className="brand-name">produits-casher</div>
               <div className="brand-sub">Liste des produits sélectionnés — Consistoire de Paris, Juillet 2025</div>
             </div>
+          </div>
+          <div className="topbar-search">
+            <input
+              type="text"
+              className="quick-search-input"
+              placeholder="Rechercher un produit, une marque, une catégorie…"
+              value={quickSearch}
+              onChange={(e) => setQuickSearch(e.target.value)}
+              aria-label="Recherche rapide"
+            />
+            {quickSearch && (
+              <button
+                className="quick-search-clear"
+                onClick={() => setQuickSearch("")}
+                aria-label="Effacer la recherche"
+              >
+                ✕
+              </button>
+            )}
           </div>
           {isMobile && (
             <button className="filters-btn-mobile" onClick={() => setSheetOpen(true)}>
@@ -554,10 +617,18 @@ export default function App() {
 
             {results.length === 0 ? (
               <div className="empty-state">
-                Aucun produit ne correspond à cette combinaison de filtres.
+                {quickSearch
+                  ? <>Aucun produit ne correspond à « {quickSearch} »{totalActive > 0 ? " avec ces filtres" : ""}.</>
+                  : "Aucun produit ne correspond à cette combinaison de filtres."}
                 <br />
-                <button className="reset-all-btn" onClick={resetAll}>
-                  Réinitialiser tous les filtres
+                <button
+                  className="reset-all-btn"
+                  onClick={() => {
+                    resetAll();
+                    setQuickSearch("");
+                  }}
+                >
+                  Réinitialiser {quickSearch ? "la recherche et " : ""}les filtres
                 </button>
               </div>
             ) : (
