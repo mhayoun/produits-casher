@@ -62,6 +62,18 @@ function itemViewportRect(viewport, item) {
   return { x, y, width: Math.abs(vx2 - vx1), height: Math.abs(vy2 - vy1) };
 }
 
+// Catalog brand fields often list several distinct brands as one
+// comma-separated string (e.g. "RIVOCCA, RIVOIRE & CARRET") — in the PDF
+// each brand heads its own entry, so the joined string never appears as a
+// contiguous run of text. Splitting on "," lets each brand be searched (and
+// paired with the produit text) independently.
+function splitMarqueTerms(marqueTerm) {
+  return String(marqueTerm || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function findAllOccurrences(haystack, needle) {
   const positions = [];
   if (!needle) return positions;
@@ -90,7 +102,10 @@ const PROXIMITY_WINDOW = 400;
  * match — a plain "does this text exist anywhere on the page" search isn't
  * enough for common product names ("Nature", "Complet", ...) that repeat
  * under several different brands on the same page.
- * Returns true if a match was located and highlighted.
+ * Returns `{ found, rect }` — `found` is true if a match was located and
+ * highlighted, and `rect` (when found) is the bounding box of the
+ * highlighted area in canvas pixel coordinates, so the caller can scroll
+ * the highlight into view instead of leaving the reader at the page top.
  *
  * `cancelToken`, if given, is mutated to expose a `.cancel()` that aborts
  * the in-flight page render. React 18 StrictMode invokes effects twice in
@@ -120,9 +135,9 @@ export async function renderPdfPageWithHighlight(
   };
 
   const pdf = await getPdfDoc();
-  if (cancelToken.cancelled) return false;
+  if (cancelToken.cancelled) return { found: false, rect: null };
   const page = await pdf.getPage(pageNumber);
-  if (cancelToken.cancelled) return false;
+  if (cancelToken.cancelled) return { found: false, rect: null };
   const viewport = page.getViewport({ scale });
 
   canvas.width = viewport.width;
@@ -132,10 +147,10 @@ export async function renderPdfPageWithHighlight(
   cancelToken._task = renderTask;
   if (cancelToken.cancelled) {
     renderTask.cancel();
-    return false;
+    return { found: false, rect: null };
   }
   await renderTask.promise;
-  if (cancelToken.cancelled) return false;
+  if (cancelToken.cancelled) return { found: false, rect: null };
 
   const textContent = await page.getTextContent();
   // Drop items that carry no real text once catalog tags like "(SG)" are
@@ -152,33 +167,47 @@ export async function renderPdfPageWithHighlight(
     corpus += normalize(it.str) + " ";
   }
 
-  const marqueNeedle = normalize(marqueTerm);
+  const marqueNeedles = splitMarqueTerms(marqueTerm).map(normalize).filter(Boolean);
   const produitNeedle = normalize(produitTerm);
-  const marquePositions = findAllOccurrences(corpus, marqueNeedle);
   const produitPositions = findAllOccurrences(corpus, produitNeedle);
 
-  // Prefer the closest (marque → produit) pair; fall back to whichever
+  // Prefer the closest (marque → produit) pair for each brand in the
+  // (possibly comma-separated) marque field; fall back to whichever
   // standalone term was found if no such pair exists on this page.
   let ranges = [];
-  let bestGap = Infinity;
-  for (const mIdx of marquePositions) {
-    for (const pIdx of produitPositions) {
-      const gap = pIdx - mIdx;
-      if (gap >= 0 && gap <= PROXIMITY_WINDOW && gap < bestGap) {
-        bestGap = gap;
-        ranges = [
-          [mIdx, mIdx + marqueNeedle.length],
-          [pIdx, pIdx + produitNeedle.length],
-        ];
+  let anyPairFound = false;
+  for (const marqueNeedle of marqueNeedles) {
+    const marquePositions = findAllOccurrences(corpus, marqueNeedle);
+    let bestGap = Infinity;
+    let bestPair = null;
+    for (const mIdx of marquePositions) {
+      for (const pIdx of produitPositions) {
+        const gap = pIdx - mIdx;
+        if (gap >= 0 && gap <= PROXIMITY_WINDOW && gap < bestGap) {
+          bestGap = gap;
+          bestPair = [
+            [mIdx, mIdx + marqueNeedle.length],
+            [pIdx, pIdx + produitNeedle.length],
+          ];
+        }
       }
     }
+    if (bestPair) {
+      anyPairFound = true;
+      ranges.push(...bestPair);
+    } else if (marquePositions.length) {
+      ranges.push([marquePositions[0], marquePositions[0] + marqueNeedle.length]);
+    }
   }
-  if (ranges.length === 0) {
-    if (marquePositions.length) ranges.push([marquePositions[0], marquePositions[0] + marqueNeedle.length]);
-    if (produitPositions.length) ranges.push([produitPositions[0], produitPositions[0] + produitNeedle.length]);
+  if (!anyPairFound && produitPositions.length) {
+    ranges.push([produitPositions[0], produitPositions[0] + produitNeedle.length]);
   }
 
   let found = false;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
   ctx.save();
   ctx.fillStyle = "rgba(46, 204, 90, 0.55)";
   for (const [idx, endIdx] of ranges) {
@@ -189,10 +218,15 @@ export async function renderPdfPageWithHighlight(
         found = true;
         const r = itemViewportRect(viewport, items[i]);
         ctx.fillRect(r.x - 2, r.y - 1, r.width + 4, r.height + 2);
+        minX = Math.min(minX, r.x);
+        minY = Math.min(minY, r.y);
+        maxX = Math.max(maxX, r.x + r.width);
+        maxY = Math.max(maxY, r.y + r.height);
       }
     }
   }
   ctx.restore();
 
-  return found;
+  if (!found) return { found: false, rect: null };
+  return { found: true, rect: { x: minX, y: minY, width: maxX - minX, height: maxY - minY } };
 }

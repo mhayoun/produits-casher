@@ -180,16 +180,23 @@ function computeOptions(filters, def) {
 --------------------------------------------------------------- */
 function PdfHighlightModal({ row, onClose }) {
   const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
   const [status, setStatus] = useState("loading"); // loading | found | notfound | error
   const [errorDetail, setErrorDetail] = useState("");
+  const [highlightRect, setHighlightRect] = useState(null);
 
   useEffect(() => {
     let alive = true;
     const cancelToken = {};
     setStatus("loading");
     setErrorDetail("");
+    setHighlightRect(null);
     renderPdfPageWithHighlight(canvasRef.current, row.page, row.marque, row.produit, undefined, cancelToken)
-      .then((found) => alive && setStatus(found ? "found" : "notfound"))
+      .then(({ found, rect }) => {
+        if (!alive) return;
+        setStatus(found ? "found" : "notfound");
+        setHighlightRect(found ? rect : null);
+      })
       .catch((e) => {
         if (!alive) return; // cancelled by cleanup (e.g. React StrictMode's double effect run in dev) — expected
         console.error("[pdf-highlight]", e);
@@ -207,6 +214,19 @@ function PdfHighlightModal({ row, onClose }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Runs after React has committed the "found" status to the DOM (canvas
+  // switched from display:none back to visible) — scrolling any earlier,
+  // e.g. right inside the render promise's `.then()`, would target a wrap
+  // element whose scrollable content is still hidden, and the browser
+  // silently clamps the scroll request to 0.
+  useEffect(() => {
+    if (status !== "found" || !highlightRect || !wrapRef.current) return;
+    const wrap = wrapRef.current;
+    const targetTop = highlightRect.y + highlightRect.height / 2 - wrap.clientHeight / 2;
+    const targetLeft = highlightRect.x + highlightRect.width / 2 - wrap.clientWidth / 2;
+    wrap.scrollTo({ top: Math.max(0, targetTop), left: Math.max(0, targetLeft), behavior: "smooth" });
+  }, [status, highlightRect]);
 
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
@@ -231,7 +251,7 @@ function PdfHighlightModal({ row, onClose }) {
             </button>
           </div>
         </div>
-        <div className="pdf-modal-canvas-wrap">
+        <div className="pdf-modal-canvas-wrap" ref={wrapRef}>
           {status === "loading" && <div className="pdf-modal-status">Chargement de la page…</div>}
           {status === "error" && (
             <div className="pdf-modal-status">
