@@ -173,7 +173,7 @@ input[type=checkbox]{accent-color:var(--accent);}
    the matching text tinted yellow directly on the page) ---------- */
 .pdf-modal-panel{
   background:var(--bg);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.35);
-  width:100%;max-width:900px;max-height:92vh;overflow:hidden;
+  width:100%;max-width:min(96vw, 1040px);max-height:92vh;overflow:hidden;
   display:flex;flex-direction:column;
 }
 .pdf-modal-header{

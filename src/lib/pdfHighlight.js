@@ -91,16 +91,51 @@ const PROXIMITY_WINDOW = 400;
  * enough for common product names ("Nature", "Complet", ...) that repeat
  * under several different brands on the same page.
  * Returns true if a match was located and highlighted.
+ *
+ * `cancelToken`, if given, is mutated to expose a `.cancel()` that aborts
+ * the in-flight page render. React 18 StrictMode invokes effects twice in
+ * dev — without cancelling the first render, its `page.render()` call and
+ * the second invocation's would both target the same <canvas>, and pdf.js
+ * throws ("Cannot use the same canvas during multiple render() operations").
+ * The caller's effect cleanup should call `cancelToken.cancel()`.
+ *
+ * `cancel` is wired up synchronously, before any `await`, precisely because
+ * StrictMode's cleanup can run in the same synchronous tick as the effect
+ * that scheduled this call — if `.cancel` were only assigned after an
+ * async gap (e.g. once `page.render()` starts), a cleanup that fires
+ * before that point would be a no-op and both renders would still race.
  */
-export async function renderPdfPageWithHighlight(canvas, pageNumber, marqueTerm, produitTerm, scale = 1.8) {
+export async function renderPdfPageWithHighlight(
+  canvas,
+  pageNumber,
+  marqueTerm,
+  produitTerm,
+  scale = 1.8,
+  cancelToken = {}
+) {
+  cancelToken.cancelled = false;
+  cancelToken.cancel = () => {
+    cancelToken.cancelled = true;
+    if (cancelToken._task) cancelToken._task.cancel();
+  };
+
   const pdf = await getPdfDoc();
+  if (cancelToken.cancelled) return false;
   const page = await pdf.getPage(pageNumber);
+  if (cancelToken.cancelled) return false;
   const viewport = page.getViewport({ scale });
 
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const ctx = canvas.getContext("2d");
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  const renderTask = page.render({ canvasContext: ctx, viewport });
+  cancelToken._task = renderTask;
+  if (cancelToken.cancelled) {
+    renderTask.cancel();
+    return false;
+  }
+  await renderTask.promise;
+  if (cancelToken.cancelled) return false;
 
   const textContent = await page.getTextContent();
   // Drop items that carry no real text once catalog tags like "(SG)" are

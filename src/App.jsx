@@ -185,19 +185,20 @@ function PdfHighlightModal({ row, onClose }) {
 
   useEffect(() => {
     let alive = true;
+    const cancelToken = {};
     setStatus("loading");
     setErrorDetail("");
-    renderPdfPageWithHighlight(canvasRef.current, row.page, row.marque, row.produit)
+    renderPdfPageWithHighlight(canvasRef.current, row.page, row.marque, row.produit, undefined, cancelToken)
       .then((found) => alive && setStatus(found ? "found" : "notfound"))
       .catch((e) => {
+        if (!alive) return; // cancelled by cleanup (e.g. React StrictMode's double effect run in dev) — expected
         console.error("[pdf-highlight]", e);
-        if (alive) {
-          setErrorDetail((e && (e.message || String(e))) || "erreur inconnue");
-          setStatus("error");
-        }
+        setErrorDetail((e && (e.message || String(e))) || "erreur inconnue");
+        setStatus("error");
       });
     return () => {
       alive = false;
+      cancelToken.cancel && cancelToken.cancel();
     };
   }, [row]);
 
