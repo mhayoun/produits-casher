@@ -1,12 +1,19 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { PRODUCTS, REMOVED_PRODUCTS } from "./data.js";
 import { fetchProductImage } from "./lib/imageClient.js";
+import { renderPdfPageWithHighlight } from "./lib/pdfHighlight.js";
 
 /* ---------------------------------------------------------------
    1. FLATTENING — transforme les entrées groupées (PRODUCTS) en
    lignes "produit" individuelles avec Rayon / Catégorie /
    Sous-catégorie / Marque / Nom produit / Logos-restrictions
 --------------------------------------------------------------- */
+const PDF_URL = "/Produits2025-2026.pdf";
+function pdfPageUrl(page) {
+  return `${PDF_URL}#page=${page}`;
+}
+
 const TAG_RE = /\((EL|SG|SL|L|N|B|V)\)/g;
 const TAG_LABELS = {
   L: "Lait (non surveillé)",
@@ -68,6 +75,7 @@ function flattenCatalog(groups, removedGroups) {
           logos: TAG_ORDER.filter((t) => tags.has(t)),
           note: g.n || "",
           removed: !!removed,
+          page: g.p || null,
         });
       });
     });
@@ -170,6 +178,96 @@ function computeOptions(filters, def) {
 /* ---------------------------------------------------------------
    3. UI helpers
 --------------------------------------------------------------- */
+function PdfHighlightModal({ row, onClose }) {
+  const canvasRef = useRef(null);
+  const [status, setStatus] = useState("loading"); // loading | found | notfound | error
+  const [errorDetail, setErrorDetail] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    setStatus("loading");
+    setErrorDetail("");
+    const terms = [
+      row.marque && row.marque.toUpperCase() !== "TOUTES MARQUES" ? row.marque : null,
+      row.produit,
+    ].filter(Boolean);
+    renderPdfPageWithHighlight(canvasRef.current, row.page, terms)
+      .then((found) => alive && setStatus(found ? "found" : "notfound"))
+      .catch((e) => {
+        console.error("[pdf-highlight]", e);
+        if (alive) {
+          setErrorDetail((e && (e.message || String(e))) || "erreur inconnue");
+          setStatus("error");
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [row]);
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="pdf-modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="pdf-modal-header">
+          <div className="pdf-modal-title">
+            Page {row.page} du PDF source
+            {status === "notfound" && (
+              <span className="pdf-modal-hint"> — texte non localisé précisément, page correcte tout de même</span>
+            )}
+            {status === "error" && <span className="pdf-modal-hint"> — erreur de chargement du PDF</span>}
+          </div>
+          <div className="pdf-modal-actions">
+            <a href={pdfPageUrl(row.page)} target="_blank" rel="noreferrer">
+              Ouvrir le PDF complet ↗
+            </a>
+            <button className="modal-close" onClick={onClose} aria-label="Fermer">
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="pdf-modal-canvas-wrap">
+          {status === "loading" && <div className="pdf-modal-status">Chargement de la page…</div>}
+          {status === "error" && (
+            <div className="pdf-modal-status">
+              Impossible de charger le PDF.
+              <div className="pdf-modal-error-detail">{errorDetail}</div>
+            </div>
+          )}
+          <canvas ref={canvasRef} className={status === "loading" || status === "error" ? "is-loading" : ""} />
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function PdfSourceButton({ row, className }) {
+  const [open, setOpen] = useState(false);
+  if (!row || !row.page) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className={"pdf-source-btn" + (className ? " " + className : "")}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+        title={`Voir la référence surlignée dans le PDF (page ${row.page})`}
+      >
+        📄 PDF p.{row.page}
+      </button>
+      {open && <PdfHighlightModal row={row} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 function LogoBadge({ code }) {
   return (
     <span className={"badge badge-" + code} title={TAG_LABELS[code] || code}>
@@ -196,6 +294,7 @@ function ProductCard({ row, compact, onOpen }) {
           {row.logos.filter((l) => l !== "SUPPRIME").map((l) => (
             <LogoBadge key={l} code={l} />
           ))}
+          <PdfSourceButton row={row} className="pdf-source-btn-compact" />
         </div>
       </div>
     );
@@ -230,7 +329,10 @@ function ProductCard({ row, compact, onOpen }) {
         </div>
       </div>
       {row.note && <div className="product-card-note">{row.note}</div>}
-      <div className="product-card-hint">🖼️ Voir les images</div>
+      <div className="product-card-footer">
+        <div className="product-card-hint">🖼️ Voir les images</div>
+        <PdfSourceButton row={row} />
+      </div>
     </div>
   );
 }
@@ -327,6 +429,7 @@ function ProductImageModal({ row, onClose }) {
               {row.logos.filter((l) => l !== "SUPPRIME").map((l) => (
                 <LogoBadge key={l} code={l} />
               ))}
+              <PdfSourceButton row={row} />
             </div>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Fermer">
