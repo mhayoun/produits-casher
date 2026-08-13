@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { PRODUCTS, REMOVED_PRODUCTS } from "./data.js";
 import { fetchProductImage } from "./lib/imageClient.js";
 import { renderPdfPageWithHighlight } from "./lib/pdfHighlight.js";
+import { useLang, LangSwitch, tagLabelFor, translateCategoryPath } from "./i18n/index.jsx";
 
 /* ---------------------------------------------------------------
    1. FLATTENING — transforme les entrées groupées (PRODUCTS) en
@@ -15,16 +16,6 @@ function pdfPageUrl(page) {
 }
 
 const TAG_RE = /\((EL|SG|SL|L|N|B|V)\)/g;
-const TAG_LABELS = {
-  L: "Lait (non surveillé)",
-  EL: "Équipement lait (parvé)",
-  N: "Nouveau produit",
-  B: "Bio",
-  SG: "Sans gluten",
-  SL: "Sans lactose",
-  V: "Végan",
-  SUPPRIME: "Supprimé de la liste",
-};
 const TAG_ORDER = ["N", "B", "V", "SG", "SL", "L", "EL", "SUPPRIME"];
 
 function extractTags(text) {
@@ -90,22 +81,19 @@ const FLAT = flattenCatalog(PRODUCTS, REMOVED_PRODUCTS);
 /* ---------------------------------------------------------------
    2. Config des filtres, dans l'ordre demandé
 --------------------------------------------------------------- */
+// Display labels for these keys live in src/i18n/strings.js (filterLabels /
+// sortLabels) so they can switch with the language — these configs stay
+// language-neutral.
 const FILTER_DEFS = [
-  { key: "rayon", label: "Rayon", getValue: (r) => r.rayon },
-  { key: "categorie", label: "Catégorie", getValue: (r) => r.categorie },
-  { key: "sousCategorie", label: "Sous-catégorie", getValue: (r) => r.sousCategorie },
-  { key: "marque", label: "Marque", getValue: (r) => r.marque },
-  { key: "produit", label: "Nom du produit", getValue: (r) => r.produit },
-  { key: "logo", label: "Logo / restriction", getValue: (r) => r.logos, multi: true },
+  { key: "rayon", getValue: (r) => r.rayon },
+  { key: "categorie", getValue: (r) => r.categorie },
+  { key: "sousCategorie", getValue: (r) => r.sousCategorie },
+  { key: "marque", getValue: (r) => r.marque },
+  { key: "produit", getValue: (r) => r.produit },
+  { key: "logo", getValue: (r) => r.logos, multi: true },
 ];
 
-const SORT_OPTIONS = [
-  { key: "default", label: "Pertinence (ordre du document)" },
-  { key: "categorie", label: "Catégorie (A → Z)" },
-  { key: "sousCategorie", label: "Sous-catégorie (A → Z)" },
-  { key: "marque", label: "Marque (A → Z)" },
-  { key: "logo", label: "Logo / restriction" },
-];
+const SORT_OPTIONS = ["default", "categorie", "sousCategorie", "marque", "logo"];
 
 function sortResults(results, sortKey) {
   if (sortKey === "default") return results;
@@ -149,7 +137,9 @@ function matchesFilters(row, filters, exceptKey) {
   return true;
 }
 
-function computeOptions(filters, def) {
+const CATEGORY_FILTER_KEYS = new Set(["rayon", "categorie", "sousCategorie"]);
+
+function computeOptions(filters, def, lang) {
   const counts = new Map();
   for (const row of FLAT) {
     if (!matchesFilters(row, filters, def.key)) continue;
@@ -170,15 +160,21 @@ function computeOptions(filters, def) {
     .map(([value, count]) => ({
       value,
       count,
-      label: def.key === "logo" ? TAG_LABELS[value] || value : value,
+      label:
+        def.key === "logo"
+          ? tagLabelFor(value, lang)
+          : CATEGORY_FILTER_KEYS.has(def.key) && lang === "en"
+          ? translateCategoryPath(value)
+          : value,
     }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "fr"));
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, lang === "en" ? "en" : "fr"));
 }
 
 /* ---------------------------------------------------------------
    3. UI helpers
 --------------------------------------------------------------- */
 function PdfHighlightModal({ row, onClose }) {
+  const { t } = useLang();
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [status, setStatus] = useState("loading"); // loading | found | notfound | error
@@ -200,7 +196,7 @@ function PdfHighlightModal({ row, onClose }) {
       .catch((e) => {
         if (!alive) return; // cancelled by cleanup (e.g. React StrictMode's double effect run in dev) — expected
         console.error("[pdf-highlight]", e);
-        setErrorDetail((e && (e.message || String(e))) || "erreur inconnue");
+        setErrorDetail((e && (e.message || String(e))) || t("pdfUnknownError"));
         setStatus("error");
       });
     return () => {
@@ -233,29 +229,25 @@ function PdfHighlightModal({ row, onClose }) {
       <div className="pdf-modal-panel" onClick={(e) => e.stopPropagation()}>
         <div className="pdf-modal-header">
           <div className="pdf-modal-title">
-            Page {row.page} du PDF source
-            {status === "found" && (
-              <span className="pdf-modal-hint"> — le produit est surligné en vert ci-dessous</span>
-            )}
-            {status === "notfound" && (
-              <span className="pdf-modal-hint"> — texte non localisé précisément, page correcte tout de même</span>
-            )}
-            {status === "error" && <span className="pdf-modal-hint"> — erreur de chargement du PDF</span>}
+            {t("pdfPageTitle", row.page)}
+            {status === "found" && <span className="pdf-modal-hint">{t("pdfFoundHint")}</span>}
+            {status === "notfound" && <span className="pdf-modal-hint">{t("pdfNotFoundHint")}</span>}
+            {status === "error" && <span className="pdf-modal-hint">{t("pdfErrorHint")}</span>}
           </div>
           <div className="pdf-modal-actions">
             <a href={pdfPageUrl(row.page)} target="_blank" rel="noreferrer">
-              Ouvrir le PDF complet ↗
+              {t("pdfOpenFull")}
             </a>
-            <button className="modal-close" onClick={onClose} aria-label="Fermer">
+            <button className="modal-close" onClick={onClose} aria-label={t("close")}>
               ✕
             </button>
           </div>
         </div>
         <div className="pdf-modal-canvas-wrap" ref={wrapRef}>
-          {status === "loading" && <div className="pdf-modal-status">Chargement de la page…</div>}
+          {status === "loading" && <div className="pdf-modal-status">{t("pdfLoading")}</div>}
           {status === "error" && (
             <div className="pdf-modal-status">
-              Impossible de charger le PDF.
+              {t("pdfLoadFailed")}
               <div className="pdf-modal-error-detail">{errorDetail}</div>
             </div>
           )}
@@ -268,6 +260,7 @@ function PdfHighlightModal({ row, onClose }) {
 }
 
 function PdfSourceButton({ row, className }) {
+  const { t } = useLang();
   const [open, setOpen] = useState(false);
   if (!row || !row.page) return null;
   return (
@@ -279,7 +272,7 @@ function PdfSourceButton({ row, className }) {
           e.stopPropagation();
           setOpen(true);
         }}
-        title={`Voir ce produit surligné en vert dans le PDF (page ${row.page})`}
+        title={t("pdfSourceBtnTitle", row.page)}
       >
         📄 PDF p.{row.page}
       </button>
@@ -289,14 +282,16 @@ function PdfSourceButton({ row, className }) {
 }
 
 function LogoBadge({ code }) {
+  const { tagLabel } = useLang();
   return (
-    <span className={"badge badge-" + code} title={TAG_LABELS[code] || code}>
+    <span className={"badge badge-" + code} title={tagLabel(code)}>
       {code}
     </span>
   );
 }
 
 function ProductCard({ row, compact, onOpen }) {
+  const { t, tr } = useLang();
   if (compact) {
     return (
       <div
@@ -310,7 +305,7 @@ function ProductCard({ row, compact, onOpen }) {
           <span className="pr-c-name">{row.produit}</span>
         </div>
         <div className="pr-c-badges">
-          {row.removed && <span className="badge badge-SUPPRIME">Suppr.</span>}
+          {row.removed && <span className="badge badge-SUPPRIME">{t("removedShort")}</span>}
           {row.logos.filter((l) => l !== "SUPPRIME").map((l) => (
             <LogoBadge key={l} code={l} />
           ))}
@@ -325,14 +320,14 @@ function ProductCard({ row, compact, onOpen }) {
       onClick={() => onOpen && onOpen(row)}
       role="button"
       tabIndex={0}
-      title="Voir les images de ce produit"
+      title={t("seeImagesTitle")}
     >
       <div className="product-card-crumb">
-        {row.rayon} <span className="crumb-sep">›</span> {row.categorie}
+        {tr(row.rayon)} <span className="crumb-sep">›</span> {tr(row.categorie)}
         {row.sousCategorie && row.sousCategorie !== row.categorie ? (
           <>
             {" "}
-            <span className="crumb-sep">›</span> {row.sousCategorie}
+            <span className="crumb-sep">›</span> {tr(row.sousCategorie)}
           </>
         ) : null}
       </div>
@@ -342,7 +337,7 @@ function ProductCard({ row, compact, onOpen }) {
           <span className="product-card-name">{row.produit}</span>
         </div>
         <div className="product-card-badges">
-          {row.removed && <span className="badge badge-SUPPRIME">Supprimé</span>}
+          {row.removed && <span className="badge badge-SUPPRIME">{t("removedFull")}</span>}
           {row.logos.filter((l) => l !== "SUPPRIME").map((l) => (
             <LogoBadge key={l} code={l} />
           ))}
@@ -350,7 +345,7 @@ function ProductCard({ row, compact, onOpen }) {
       </div>
       {row.note && <div className="product-card-note">{row.note}</div>}
       <div className="product-card-footer">
-        <div className="product-card-hint">🖼️ Voir les images</div>
+        <div className="product-card-hint">{t("seeImages")}</div>
         <PdfSourceButton row={row} />
       </div>
     </div>
@@ -381,6 +376,7 @@ function splitVariants(produit) {
 }
 
 function VariantImage({ query, label }) {
+  const { t } = useLang();
   const [state, setState] = useState({ loading: true, url: null, error: false, source: null });
 
   useEffect(() => {
@@ -402,24 +398,25 @@ function VariantImage({ query, label }) {
       <div className="variant-image-wrap">
         {state.loading && <div className="skeleton" />}
         {!state.loading && state.url && (
-          <a href={searchUrl} target="_blank" rel="noreferrer" title={`${label} — cliquer pour vérifier et voir toutes les images`}>
+          <a href={searchUrl} target="_blank" rel="noreferrer" title={t("variantImgTitle", label)}>
             <img src={state.url} alt={label} loading="lazy" />
-            <span className="variant-ai-flag">1ᵉʳ résultat IA · cliquer pour vérifier</span>
+            <span className="variant-ai-flag">{t("variantAiFlag")}</span>
           </a>
         )}
         {!state.loading && !state.url && (
           <a className="variant-fallback" href={searchUrl} target="_blank" rel="noreferrer">
-            🔍<span>Rechercher l'image</span>
+            🔍<span>{t("searchImage")}</span>
           </a>
         )}
       </div>
       <div className="variant-label">{label}</div>
-      {state.source && <div className="variant-source">via {state.source.replace("_", " ")}</div>}
+      {state.source && <div className="variant-source">{t("viaSource", state.source.replace("_", " "))}</div>}
     </div>
   );
 }
 
 function ProductImageModal({ row, onClose }) {
+  const { t, tr } = useLang();
   const variants = useMemo(() => splitVariants(row.produit).slice(0, 16), [row]);
   const overflow = splitVariants(row.produit).length - variants.length;
 
@@ -435,46 +432,36 @@ function ProductImageModal({ row, onClose }) {
         <div className="modal-header">
           <div>
             <div className="modal-crumb">
-              {row.rayon} <span className="crumb-sep">›</span> {row.categorie}
+              {tr(row.rayon)} <span className="crumb-sep">›</span> {tr(row.categorie)}
               {row.sousCategorie && row.sousCategorie !== row.categorie ? (
                 <>
                   {" "}
-                  <span className="crumb-sep">›</span> {row.sousCategorie}
+                  <span className="crumb-sep">›</span> {tr(row.sousCategorie)}
                 </>
               ) : null}
             </div>
             <h3>{row.marque}</h3>
             <div className="modal-badges">
-              {row.removed && <span className="badge badge-SUPPRIME">Supprimé</span>}
+              {row.removed && <span className="badge badge-SUPPRIME">{t("removedFull")}</span>}
               {row.logos.filter((l) => l !== "SUPPRIME").map((l) => (
                 <LogoBadge key={l} code={l} />
               ))}
               <PdfSourceButton row={row} />
             </div>
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Fermer">
+          <button className="modal-close" onClick={onClose} aria-label={t("close")}>
             ✕
           </button>
         </div>
         {row.note && <p className="modal-note">{row.note}</p>}
-        <div className="modal-ai-warning">
-          ⚠️ Les images ci-dessous sont le <strong>premier résultat trouvé automatiquement par IA</strong> — elles
-          ne sont pas vérifiées. Cliquez sur une image pour ouvrir la recherche complète et voir toutes les images
-          disponibles avant de vous y fier.
-        </div>
+        <div className="modal-ai-warning">{t("aiWarning")}</div>
         <div className="modal-image-grid">
           {variants.map((v, i) => (
             <VariantImage key={row.id + "-" + i} query={`${row.marque} ${v}`} label={v} />
           ))}
         </div>
-        {overflow > 0 && (
-          <div className="modal-overflow-note">+ {overflow} autres variantes non affichées</div>
-        )}
-        <div className="modal-footer">
-          Images recherchées et mises en cache automatiquement via l'API serverless
-          (Upstash Redis + Vercel Blob) — chaque produit n'est résolu qu'une seule fois pour
-          tous les visiteurs.
-        </div>
+        {overflow > 0 && <div className="modal-overflow-note">{t("overflowVariants", overflow)}</div>}
+        <div className="modal-footer">{t("modalFooter")}</div>
       </div>
     </div>
   );
@@ -483,9 +470,11 @@ function ProductImageModal({ row, onClose }) {
 /* Accordion section for one filter, with checkbox multi-select and a
    search-within-options box for long lists (Marque, Nom du produit...) */
 function FilterSection({ def, filters, setFilters, isOpen, onToggle }) {
+  const { t, lang, filterLabel } = useLang();
   const open = isOpen;
   const [search, setSearch] = useState("");
-  const options = useMemo(() => computeOptions(filters, def), [filters]);
+  const label = filterLabel(def.key);
+  const options = useMemo(() => computeOptions(filters, def, lang), [filters, lang]);
   const visibleOptions = useMemo(() => {
     if (!search.trim()) return options;
     const needle = normalizeSearch(search);
@@ -513,12 +502,12 @@ function FilterSection({ def, filters, setFilters, isOpen, onToggle }) {
       <button className="accordion-head" onClick={onToggle}>
         <span className="accordion-head-left">
           <span className="chevron">{open ? "−" : "+"}</span>
-          <span className="accordion-title">{def.label}</span>
+          <span className="accordion-title">{label}</span>
           {selected.size > 0 && <span className="count-pill">{selected.size}</span>}
         </span>
         {selected.size > 0 && (
           <span className="reset-link" onClick={resetThis}>
-            réinitialiser
+            {t("resetThis")}
           </span>
         )}
       </button>
@@ -528,16 +517,14 @@ function FilterSection({ def, filters, setFilters, isOpen, onToggle }) {
             <input
               type="text"
               className="filter-search-input"
-              placeholder={`Rechercher : ${def.label.toLowerCase()}…`}
+              placeholder={t("searchWithin", label)}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onClick={(e) => e.stopPropagation()}
             />
           )}
           {visibleOptions.length === 0 && (
-            <div className="no-options">
-              {options.length === 0 ? "Aucune option disponible" : "Aucun résultat pour cette recherche"}
-            </div>
+            <div className="no-options">{options.length === 0 ? t("noOptions") : t("noSearchResults")}</div>
           )}
           {visibleOptions.map((opt) => (
             <label key={opt.value} className="filter-option">
@@ -561,14 +548,15 @@ function FilterSection({ def, filters, setFilters, isOpen, onToggle }) {
 }
 
 function FiltersPanel({ filters, setFilters, totalActive, resetAll }) {
+  const { t } = useLang();
   const [openKey, setOpenKey] = useState(FILTER_DEFS[0].key);
   return (
     <div className="filters-panel">
       <div className="filters-panel-header">
-        <h2>Filtres</h2>
+        <h2>{t("filters")}</h2>
         {totalActive > 0 && (
           <button className="reset-all-btn" onClick={resetAll}>
-            Tout réinitialiser ({totalActive})
+            {t("resetAll", totalActive)}
           </button>
         )}
       </div>
@@ -587,13 +575,14 @@ function FiltersPanel({ filters, setFilters, totalActive, resetAll }) {
 }
 
 function SortSelect({ sortKey, setSortKey }) {
+  const { t, sortLabel } = useLang();
   return (
     <label className="sort-select">
-      <span>Trier par</span>
+      <span>{t("sortBy")}</span>
       <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
-        {SORT_OPTIONS.map((o) => (
-          <option key={o.key} value={o.key}>
-            {o.label}
+        {SORT_OPTIONS.map((key) => (
+          <option key={key} value={key}>
+            {sortLabel(key)}
           </option>
         ))}
       </select>
@@ -602,10 +591,11 @@ function SortSelect({ sortKey, setSortKey }) {
 }
 
 function ActiveChips({ filters, setFilters }) {
+  const { t, tr, tagLabel, filterLabel } = useLang();
   const chips = [];
   FILTER_DEFS.forEach((def) => {
     filters[def.key].forEach((val) => {
-      chips.push({ key: def.key, val, label: def.label });
+      chips.push({ key: def.key, val, label: filterLabel(def.key) });
     });
   });
   if (chips.length === 0) return null;
@@ -618,12 +608,17 @@ function ActiveChips({ filters, setFilters }) {
       return next;
     });
   };
+  const displayVal = (c) => {
+    if (c.key === "logo") return tagLabel(c.val);
+    if (CATEGORY_FILTER_KEYS.has(c.key)) return tr(c.val);
+    return c.val;
+  };
   return (
     <div className="active-chips">
       {chips.map((c, i) => (
         <span className="chip" key={c.key + c.val + i}>
-          <span className="chip-label">{c.label}:</span> {c.val}
-          <button className="chip-x" onClick={() => remove(c.key, c.val)} aria-label="retirer">
+          <span className="chip-label">{c.label}:</span> {displayVal(c)}
+          <button className="chip-x" onClick={() => remove(c.key, c.val)} aria-label={t("removeAria")}>
             ×
           </button>
         </span>
@@ -638,6 +633,7 @@ function ActiveChips({ filters, setFilters }) {
 const PAGE_SIZE = 60;
 
 export default function App() {
+  const { t, localeTag } = useLang();
   const [filters, setFilters] = useState(emptyFilters());
   const [sortKey, setSortKey] = useState("default");
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 900 : false);
@@ -681,31 +677,32 @@ export default function App() {
             <span className="brand-mark">✓כ</span>
             <div>
               <div className="brand-name">produits-casher</div>
-              <div className="brand-sub">Liste des produits sélectionnés — Consistoire de Paris, Juillet 2025</div>
+              <div className="brand-sub">{t("tagline")}</div>
             </div>
           </div>
           <div className="topbar-search">
             <input
               type="text"
               className="quick-search-input"
-              placeholder="Rechercher un produit, une marque, une catégorie…"
+              placeholder={t("searchPlaceholder")}
               value={quickSearch}
               onChange={(e) => setQuickSearch(e.target.value)}
-              aria-label="Recherche rapide"
+              aria-label={t("quickSearchAria")}
             />
             {quickSearch && (
               <button
                 className="quick-search-clear"
                 onClick={() => setQuickSearch("")}
-                aria-label="Effacer la recherche"
+                aria-label={t("clearSearchAria")}
               >
                 ✕
               </button>
             )}
           </div>
+          <LangSwitch />
           {isMobile && (
             <button className="filters-btn-mobile" onClick={() => setSheetOpen(true)}>
-              Filtres{totalActive > 0 ? " · " + totalActive : ""}
+              {t("filtersMobileBtn", totalActive)}
             </button>
           )}
         </div>
@@ -732,12 +729,10 @@ export default function App() {
           <section className="results-col">
             <div className="results-summary">
               <div className="results-summary-count">
-                <strong>{results.length.toLocaleString("fr-FR")}</strong> produit{results.length > 1 ? "s" : ""}{" "}
-                trouvé
-                {results.length > 1 ? "s" : ""}
+                <strong>{results.length.toLocaleString(localeTag)}</strong> {t("productsFoundSuffix", results.length)}
                 {totalActive > 0 && (
                   <button className="inline-reset" onClick={resetAll}>
-                    effacer les {totalActive} filtre{totalActive > 1 ? "s" : ""}
+                    {t("clearNFilters", totalActive)}
                   </button>
                 )}
               </div>
@@ -748,9 +743,14 @@ export default function App() {
 
             {results.length === 0 ? (
               <div className="empty-state">
-                {quickSearch
-                  ? <>Aucun produit ne correspond à « {quickSearch} »{totalActive > 0 ? " avec ces filtres" : ""}.</>
-                  : "Aucun produit ne correspond à cette combinaison de filtres."}
+                {quickSearch ? (
+                  <>
+                    {t("noResultsQuery", quickSearch)}
+                    {totalActive > 0 ? t("noResultsQueryWithFilters") : ""}.
+                  </>
+                ) : (
+                  t("noResultsPlain")
+                )}
                 <br />
                 <button
                   className="reset-all-btn"
@@ -759,7 +759,7 @@ export default function App() {
                     setQuickSearch("");
                   }}
                 >
-                  Réinitialiser {quickSearch ? "la recherche et " : ""}les filtres
+                  {t("resetSearchAndFilters", !!quickSearch)}
                 </button>
               </div>
             ) : (
@@ -772,8 +772,7 @@ export default function App() {
                 {visibleCount < results.length && (
                   <div className="load-more-wrap">
                     <button className="load-more-btn" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
-                      Afficher {Math.min(PAGE_SIZE, results.length - visibleCount)} produits de plus (
-                      {visibleCount} / {results.length})
+                      {t("loadMore", Math.min(PAGE_SIZE, results.length - visibleCount), visibleCount, results.length)}
                     </button>
                   </div>
                 )}
@@ -784,10 +783,7 @@ export default function App() {
       )}
 
       <footer className="site-footer">
-        <div>
-          Document source : Liste des Produits Sélectionnés, ACIP / Consistoire de Paris Île-de-France — usage privé,
-          cercle de famille. Vérifiez toujours les mentions et codes indiqués sur l'emballage.
-        </div>
+        <div>{t("footerLegal")}</div>
         <div className="copyright">© yelotag.com</div>
       </footer>
 
@@ -801,20 +797,21 @@ export default function App() {
 /* Mobile split view : 3/4 filtres (haut) + 1/4 résultats en direct (bas),
    visibles en parallèle pendant qu'on coche les filtres. */
 function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, onClose, onOpenProduct }) {
+  const { t, localeTag } = useLang();
   const [openKey, setOpenKey] = useState(FILTER_DEFS[0].key);
   return (
     <div className="mobile-split">
       <div className="mobile-split-filters">
         <div className="filters-panel-header">
-          <h2>Filtres</h2>
+          <h2>{t("filters")}</h2>
           <div className="mobile-split-header-actions">
             {totalActive > 0 && (
               <button className="reset-all-btn" onClick={resetAll}>
-                Tout réinitialiser ({totalActive})
+                {t("resetAll", totalActive)}
               </button>
             )}
             <button className="sheet-close" onClick={onClose}>
-              Fermer ✕
+              {t("mobileClose")}
             </button>
           </div>
         </div>
@@ -833,20 +830,19 @@ function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, 
 
       <div className="mobile-split-results">
         <div className="mobile-split-results-head">
-          <strong>{results.length.toLocaleString("fr-FR")}</strong> produit{results.length > 1 ? "s" : ""} trouvé
-          {results.length > 1 ? "s" : ""}
+          <strong>{results.length.toLocaleString(localeTag)}</strong> {t("productsFoundSuffix", results.length)}
           <button className="sheet-cta-mini" onClick={onClose}>
-            Voir la liste complète
+            {t("mobileSeeFullList")}
           </button>
         </div>
         <div className="mobile-split-results-list">
           {results.length === 0 ? (
-            <div className="empty-state-mini">Aucun résultat</div>
+            <div className="empty-state-mini">{t("mobileNoResults")}</div>
           ) : (
             results.slice(0, 40).map((r) => <ProductCard key={r.id} row={r} compact onOpen={onOpenProduct} />)
           )}
           {results.length > 40 && (
-            <div className="empty-state-mini">… et {results.length - 40} autres, fermez pour tout voir</div>
+            <div className="empty-state-mini">{t("mobileMoreResults", results.length - 40)}</div>
           )}
         </div>
       </div>

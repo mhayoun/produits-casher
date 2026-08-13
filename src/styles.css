@@ -76,6 +76,16 @@ input[type=checkbox]{accent-color:var(--accent);}
   display:flex;align-items:center;justify-content:center;
 }
 .quick-search-clear:hover{background:rgba(255,255,255,0.35);}
+.lang-switch{
+  display:flex;flex-shrink:0;background:rgba(255,255,255,0.14);
+  border:1px solid rgba(255,255,255,0.3);border-radius:999px;padding:2px;
+}
+.lang-switch-btn{
+  background:transparent;border:none;color:rgba(255,255,255,0.75);
+  font-size:12.5px;font-weight:700;letter-spacing:0.3px;
+  border-radius:999px;padding:6px 12px;
+}
+.lang-switch-btn.is-active{background:#fff;color:var(--accent-dark);}
 @media (max-width:900px){
   .topbar-inner{flex-wrap:wrap;}
   .topbar-search{order:3;flex:1 1 100%;max-width:none;}
