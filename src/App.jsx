@@ -461,8 +461,8 @@ function ProductImageModal({ row, onClose }) {
 
 /* Accordion section for one filter, with checkbox multi-select and a
    search-within-options box for long lists (Marque, Nom du produit...) */
-function FilterSection({ def, filters, setFilters, defaultOpen }) {
-  const [open, setOpen] = useState(!!defaultOpen);
+function FilterSection({ def, filters, setFilters, isOpen, onToggle }) {
+  const open = isOpen;
   const [search, setSearch] = useState("");
   const options = useMemo(() => computeOptions(filters, def), [filters]);
   const visibleOptions = useMemo(() => {
@@ -489,7 +489,7 @@ function FilterSection({ def, filters, setFilters, defaultOpen }) {
 
   return (
     <div className={"accordion-section" + (open ? " is-open" : "")}>
-      <button className="accordion-head" onClick={() => setOpen((o) => !o)}>
+      <button className="accordion-head" onClick={onToggle}>
         <span className="accordion-head-left">
           <span className="chevron">{open ? "−" : "+"}</span>
           <span className="accordion-title">{def.label}</span>
@@ -540,6 +540,7 @@ function FilterSection({ def, filters, setFilters, defaultOpen }) {
 }
 
 function FiltersPanel({ filters, setFilters, totalActive, resetAll }) {
+  const [openKey, setOpenKey] = useState(FILTER_DEFS[0].key);
   return (
     <div className="filters-panel">
       <div className="filters-panel-header">
@@ -550,8 +551,15 @@ function FiltersPanel({ filters, setFilters, totalActive, resetAll }) {
           </button>
         )}
       </div>
-      {FILTER_DEFS.map((def, i) => (
-        <FilterSection key={def.key} def={def} filters={filters} setFilters={setFilters} defaultOpen={i === 0} />
+      {FILTER_DEFS.map((def) => (
+        <FilterSection
+          key={def.key}
+          def={def}
+          filters={filters}
+          setFilters={setFilters}
+          isOpen={openKey === def.key}
+          onToggle={() => setOpenKey((k) => (k === def.key ? null : def.key))}
+        />
       ))}
     </div>
   );
@@ -772,6 +780,7 @@ export default function App() {
 /* Mobile split view : 3/4 filtres (haut) + 1/4 résultats en direct (bas),
    visibles en parallèle pendant qu'on coche les filtres. */
 function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, onClose, onOpenProduct }) {
+  const [openKey, setOpenKey] = useState(FILTER_DEFS[0].key);
   return (
     <div className="mobile-split">
       <div className="mobile-split-filters">
@@ -789,8 +798,15 @@ function MobileSplitView({ filters, setFilters, totalActive, resetAll, results, 
           </div>
         </div>
         <ActiveChips filters={filters} setFilters={setFilters} />
-        {FILTER_DEFS.map((def, i) => (
-          <FilterSection key={def.key} def={def} filters={filters} setFilters={setFilters} defaultOpen={i === 0} />
+        {FILTER_DEFS.map((def) => (
+          <FilterSection
+            key={def.key}
+            def={def}
+            filters={filters}
+            setFilters={setFilters}
+            isOpen={openKey === def.key}
+            onToggle={() => setOpenKey((k) => (k === def.key ? null : def.key))}
+          />
         ))}
       </div>
 
