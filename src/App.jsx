@@ -784,7 +784,9 @@ export default function App() {
 
       <footer className="site-footer">
         <div>{t("footerLegal")}</div>
-        <div className="copyright">© yelotag.com</div>
+        <div className="copyright">
+          © <a href="https://yelotag.com" target="_blank" rel="noreferrer">yelotag.com</a>
+        </div>
       </footer>
 
       {selectedProduct && (

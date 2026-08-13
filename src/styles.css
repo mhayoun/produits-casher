@@ -347,6 +347,8 @@ input[type=checkbox]{accent-color:var(--accent);}
 }
 .site-footer > div:first-child{max-width:900px;margin:0 auto;opacity:0.88;text-align:center;}
 .copyright{text-align:center;margin-top:10px;font-weight:600;letter-spacing:0.03em;}
+.copyright a{color:#fff;text-decoration:none;}
+.copyright a:hover{text-decoration:underline;}
 
 @media (max-width:899px){
   .layout{padding:16px 14px 30px;grid-template-columns:1fr;}
