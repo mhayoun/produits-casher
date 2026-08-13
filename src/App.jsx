@@ -213,6 +213,9 @@ function PdfHighlightModal({ row, onClose }) {
         <div className="pdf-modal-header">
           <div className="pdf-modal-title">
             Page {row.page} du PDF source
+            {status === "found" && (
+              <span className="pdf-modal-hint"> — le produit est surligné en vert ci-dessous</span>
+            )}
             {status === "notfound" && (
               <span className="pdf-modal-hint"> — texte non localisé précisément, page correcte tout de même</span>
             )}
@@ -255,7 +258,7 @@ function PdfSourceButton({ row, className }) {
           e.stopPropagation();
           setOpen(true);
         }}
-        title={`Voir la référence surlignée dans le PDF (page ${row.page})`}
+        title={`Voir ce produit surligné en vert dans le PDF (page ${row.page})`}
       >
         📄 PDF p.{row.page}
       </button>

@@ -145,7 +145,7 @@ export async function renderPdfPageWithHighlight(canvas, pageNumber, marqueTerm,
 
   let found = false;
   ctx.save();
-  ctx.fillStyle = "rgba(255, 224, 51, 0.6)";
+  ctx.fillStyle = "rgba(46, 204, 90, 0.55)";
   for (const [idx, endIdx] of ranges) {
     for (let i = 0; i < items.length; i++) {
       const start = itemStarts[i];
