@@ -62,13 +62,37 @@ function itemViewportRect(viewport, item) {
   return { x, y, width: Math.abs(vx2 - vx1), height: Math.abs(vy2 - vy1) };
 }
 
+function findAllOccurrences(haystack, needle) {
+  const positions = [];
+  if (!needle) return positions;
+  let from = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx === -1) break;
+    positions.push(idx);
+    from = idx + 1;
+  }
+  return positions;
+}
+
+// How far (in normalized characters) the product text is allowed to be from
+// its brand heading before we no longer trust the pairing. A catalog entry's
+// brand and item text always sit right next to each other in the PDF, so a
+// short window is enough — and it's what keeps a generic product name like
+// "Nature" (which repeats many times per page across different brands) from
+// getting matched to some unrelated brand's "Nature" elsewhere on the page.
+const PROXIMITY_WINDOW = 400;
+
 /**
  * Render `pageNumber` (1-based) onto `canvas`, then draw a yellow highlight
- * over any text on the page matching one of `terms` (tried independently,
- * case/accent-insensitive substring match against the page's text layer).
- * Returns true if at least one term was located and highlighted.
+ * over the marque/produit text on that page. When both are given, only a
+ * marque occurrence with the produit text shortly after it counts as a
+ * match — a plain "does this text exist anywhere on the page" search isn't
+ * enough for common product names ("Nature", "Complet", ...) that repeat
+ * under several different brands on the same page.
+ * Returns true if a match was located and highlighted.
  */
-export async function renderPdfPageWithHighlight(canvas, pageNumber, terms, scale = 1.8) {
+export async function renderPdfPageWithHighlight(canvas, pageNumber, marqueTerm, produitTerm, scale = 1.8) {
   const pdf = await getPdfDoc();
   const page = await pdf.getPage(pageNumber);
   const viewport = page.getViewport({ scale });
@@ -93,15 +117,36 @@ export async function renderPdfPageWithHighlight(canvas, pageNumber, terms, scal
     corpus += normalize(it.str) + " ";
   }
 
+  const marqueNeedle = normalize(marqueTerm);
+  const produitNeedle = normalize(produitTerm);
+  const marquePositions = findAllOccurrences(corpus, marqueNeedle);
+  const produitPositions = findAllOccurrences(corpus, produitNeedle);
+
+  // Prefer the closest (marque → produit) pair; fall back to whichever
+  // standalone term was found if no such pair exists on this page.
+  let ranges = [];
+  let bestGap = Infinity;
+  for (const mIdx of marquePositions) {
+    for (const pIdx of produitPositions) {
+      const gap = pIdx - mIdx;
+      if (gap >= 0 && gap <= PROXIMITY_WINDOW && gap < bestGap) {
+        bestGap = gap;
+        ranges = [
+          [mIdx, mIdx + marqueNeedle.length],
+          [pIdx, pIdx + produitNeedle.length],
+        ];
+      }
+    }
+  }
+  if (ranges.length === 0) {
+    if (marquePositions.length) ranges.push([marquePositions[0], marquePositions[0] + marqueNeedle.length]);
+    if (produitPositions.length) ranges.push([produitPositions[0], produitPositions[0] + produitNeedle.length]);
+  }
+
   let found = false;
   ctx.save();
   ctx.fillStyle = "rgba(255, 224, 51, 0.6)";
-  for (const term of terms) {
-    const needle = normalize(term);
-    if (!needle) continue;
-    const idx = corpus.indexOf(needle);
-    if (idx === -1) continue;
-    const endIdx = idx + needle.length;
+  for (const [idx, endIdx] of ranges) {
     for (let i = 0; i < items.length; i++) {
       const start = itemStarts[i];
       const end = start + normalize(items[i].str).length;

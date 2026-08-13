@@ -187,11 +187,7 @@ function PdfHighlightModal({ row, onClose }) {
     let alive = true;
     setStatus("loading");
     setErrorDetail("");
-    const terms = [
-      row.marque && row.marque.toUpperCase() !== "TOUTES MARQUES" ? row.marque : null,
-      row.produit,
-    ].filter(Boolean);
-    renderPdfPageWithHighlight(canvasRef.current, row.page, terms)
+    renderPdfPageWithHighlight(canvasRef.current, row.page, row.marque, row.produit)
       .then((found) => alive && setStatus(found ? "found" : "notfound"))
       .catch((e) => {
         console.error("[pdf-highlight]", e);
