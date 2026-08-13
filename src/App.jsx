@@ -163,11 +163,11 @@ function computeOptions(filters, def, lang) {
       label:
         def.key === "logo"
           ? tagLabelFor(value, lang)
-          : CATEGORY_FILTER_KEYS.has(def.key) && lang === "en"
-          ? translateCategoryPath(value)
+          : CATEGORY_FILTER_KEYS.has(def.key)
+          ? translateCategoryPath(value, lang) || value
           : value,
     }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, lang === "en" ? "en" : "fr"));
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, lang === "fr" ? "fr" : lang));
 }
 
 /* ---------------------------------------------------------------
@@ -251,7 +251,15 @@ function PdfHighlightModal({ row, onClose }) {
               <div className="pdf-modal-error-detail">{errorDetail}</div>
             </div>
           )}
-          <canvas ref={canvasRef} className={status === "loading" || status === "error" ? "is-loading" : ""} />
+          {/* dir="ltr" pinned regardless of UI language: pdf.js draws the PDF's
+              text with ctx.fillText(), whose direction inherits from the
+              canvas's computed CSS direction — under a Hebrew/RTL page that
+              silently bidi-reorders the (French) glyphs into garbage. */}
+          <canvas
+            ref={canvasRef}
+            dir="ltr"
+            className={status === "loading" || status === "error" ? "is-loading" : ""}
+          />
         </div>
       </div>
     </div>,
@@ -785,7 +793,7 @@ export default function App() {
       <footer className="site-footer">
         <div>{t("footerLegal")}</div>
         <div className="copyright">
-          © <a href="https://yelotag.com" target="_blank" rel="noreferrer">yelotag.com</a>
+          © <a href="https://www.yelotag.com" target="_blank" rel="noreferrer">yelotag.com</a>
         </div>
       </footer>
 
