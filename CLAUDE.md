@@ -1,4 +1,4 @@
-# CLAUDE.md
+    # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -59,4 +59,11 @@ All env vars in this pipeline are optional — with none set, the endpoint still
 
 ### Deployment
 
-`vercel.json` pins `buildCommand`/`outputDirectory`/`framework` explicitly (Vite auto-detection fallback). Deploy via the Vercel dashboard (auto-detects Vite) or `vercel` / `vercel --prod`.
+`vercel.json` pins `buildCommand`/`outputDirectory`/`framework` explicitly (Vite auto-detection fallback).
+
+**Vercel account:** the project lives in the `memo4unix-8057` account (team ID `team_cqBEyBJYKwVM59aL3YB9M1EV`, project `produits-casher`, ID `prj_77HSju0Y0hWn9aOPq3V4dSj5wgUh`), production URL `https://produits-casher.vercel.app`. It was moved there in Nov 2026 from an older account by re-creating it (project transfer didn't work); any other Vercel account the CLI or the Vercel MCP happens to be logged into is not this one — check `vercel whoami` before running `vercel link`/`env`/`deploy`.
+
+- **Auto-deploys:** the GitHub repo `mhayoun/produits-casher` is connected; every push to `master` deploys to production, other branches get preview deployments. Manual fallback: `vercel --prod` from this folder.
+- **Env vars** (set for Production, Preview and Development): `SERPAPI_KEY`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `BLOB_READ_WRITE_TOKEN`. Refresh local values with `vercel env pull .env.local`.
+- **Blob:** store `produits-casher-images` (public, region `cdg1`), connected to the project — its connection created `BLOB_READ_WRITE_TOKEN`.
+- **Redis:** the Upstash Redis credentials were copied over from the old account, so its cache (and image URLs pointing at the old account's Blob store) carried over. If the old Blob store is ever deleted, those cached entries will break and need to be cleared from Redis so the images get re-resolved into the new store.
